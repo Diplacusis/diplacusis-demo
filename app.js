@@ -524,30 +524,34 @@ function render() {
 /* ------------------------------------------------------------------ *
  * Patient frequency sliders
  * ------------------------------------------------------------------ */
-function updateFine2Range(fine1Hz) {
+// The real window gives Fine-2 a range that depends on Fine-1.  Its track is
+// kept fixed at 0..1000 here so the thumb never jumps while another slider is
+// moving; the position is mapped linearly over the current bounds.
+function fine2PositionToHz(fine1Hz, position) {
   const [low, high] = fine2Bounds(fine1Hz);
-  const input = $('#fine2');
-  input.min = String(low);
-  input.max = String(high);
-  const current = clamp(Math.round(Number(input.value) || Math.round(fine1Hz)), low, high);
-  input.value = String(current);
-  return current;
+  return Math.round(low + (high - low) * (clamp(position, 0, 1000) / 1000));
+}
+
+function fine2HzToPosition(fine1Hz, frequency) {
+  const [low, high] = fine2Bounds(fine1Hz);
+  return Math.round(1000 * (clamp(frequency, low, high) - low) / (high - low));
+}
+
+function currentFine1Hz() {
+  const macroHz = macroToHz($('#macro').value);
+  return fine1ToHz(macroHz, $('#fine1').value);
 }
 
 function cascadeFrequency() {
-  const macroHz = macroToHz($('#macro').value);
-  const fine1Hz = fine1ToHz(macroHz, $('#fine1').value);
-  updateFine2Range(fine1Hz);
-  return Number($('#fine2').value);
+  return fine2PositionToHz(currentFine1Hz(), Number($('#fine2').value));
 }
 
 function setPatientSliders(frequency) {
   const [macro, fine1, fine2] = positionsForFrequency(frequency);
   $('#macro').value = String(macro);
   $('#fine1').value = String(fine1);
-  $('#fine2').min = String(fine2Bounds(fine1ToHz(macroToHz(macro), fine1))[0]);
-  $('#fine2').max = String(fine2Bounds(fine1ToHz(macroToHz(macro), fine1))[1]);
-  $('#fine2').value = String(fine2);
+  const fine1Hz = fine1ToHz(macroToHz(macro), fine1);
+  $('#fine2').value = String(fine2HzToPosition(fine1Hz, fine2));
   state.testFreq = fine2;
 }
 
@@ -568,10 +572,10 @@ function onPatientSliderChange() {
   renderSession();
 }
 
-function onFine1Change() {
-  const macroHz = macroToHz($('#macro').value);
-  const fine1Hz = fine1ToHz(macroHz, $('#fine1').value);
-  updateFine2Range(fine1Hz);
+// Coarse and Medium snap Fine-2 back to the centre of its new range, exactly
+// like the desktop application.  This keeps the three controls coherent.
+function onCoarseOrMediumChange() {
+  $('#fine2').value = '500';
   onPatientSliderChange();
 }
 
@@ -921,8 +925,8 @@ function wireEvents() {
   $('#ref-volume').addEventListener('input', onRefVolumeMoved);
   $('#test-volume').addEventListener('input', onTestVolumeMoved);
 
-  $('#macro').addEventListener('input', onPatientSliderChange);
-  $('#fine1').addEventListener('input', onFine1Change);
+  $('#macro').addEventListener('input', onCoarseOrMediumChange);
+  $('#fine1').addEventListener('input', onCoarseOrMediumChange);
   $('#fine2').addEventListener('input', onPatientSliderChange);
 
   $('#start-trial').addEventListener('click', startTrial);

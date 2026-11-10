@@ -58,7 +58,8 @@
 
       <article class="card">
         <h3>2. Patient loudness calibration</h3>
-        <p class="hint">Start unlocks only after all ten frequencies are stored.</p>
+        <p class="hint">Start unlocks only after all ten frequencies are stored.
+          A session runs 30 trials: every frequency three times, in random order.</p>
         <div class="calib-grid" id="calib-grid"></div>
         <div class="button-row">
           <button class="btn primary" id="calibrate-all">Calibrate all 10 (demo)</button>
@@ -84,11 +85,12 @@
       <article class="card">
         <h3>4. Session</h3>
         <div class="button-row">
-          <button class="btn primary" id="start-trial" disabled>Start matching</button>
-          <button class="btn" id="stop-trial" disabled>Fin / stop</button>
+          <button class="btn primary" id="start-trial" disabled>Start session (30 trials)</button>
+          <button class="btn" id="stop-trial" disabled>Stop session</button>
         </div>
         <p class="status-line" id="session-status">Calibrate all ten frequencies to unlock Start.</p>
-        <p class="readout"><span>Trial</span><strong id="trial-number">1</strong>
+        <p class="readout"><span>Session</span><strong id="session-progress">—</strong>
+          <span>Trial</span><strong id="trial-number">1</strong>
           <span>State</span><strong id="state-label">Idle</strong>
           <span>Test frequency</span><strong id="test-frequency">—</strong></p>
         <div class="reset-grid">

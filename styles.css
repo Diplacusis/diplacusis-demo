@@ -216,7 +216,7 @@ input[type="range"]:disabled { opacity: .45; }
 
 .readout {
   display: grid;
-  grid-template-columns: auto auto auto auto auto minmax(0, 1fr);
+  grid-template-columns: auto auto auto auto auto auto auto minmax(0, 1fr);
   gap: 6px 10px;
   align-items: baseline;
   margin: 10px 0;

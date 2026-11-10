@@ -30,9 +30,13 @@ const CALIB_START_DB = 65;
 const SAFETY_CAP_DB = 95;
 const MODE_ALT = 2;
 const MODE_INT = 3;
-const MACRO_MIN_HZ = 250;
+// Coarse position 0 is an octave below the lowest reference frequency, so the
+// 250 Hz reference is not at the very bottom of the patient's slider.
+const MACRO_MIN_HZ = 125;
 const MACRO_RATIO = 1.03511;
 const MACRO_MAX = 127;
+const TRIALS_PER_FREQUENCY = 3;
+const SESSION_LENGTH = FREQUENCIES.length * TRIALS_PER_FREQUENCY;
 const FINE1_MAX = 623;
 const FINE1_LOW = 0.5;
 const FINE1_HIGH = 2.1;
@@ -133,11 +137,28 @@ function volumeToSlider(volume, frequency) {
 }
 
 function randomStartFrequency(reference) {
+  const lowest = MACRO_MIN_HZ;
+  const highest = Math.min(10000, MACRO_MIN_HZ * Math.pow(MACRO_RATIO, MACRO_MAX));
   let value;
   do {
-    value = Math.floor(250 + Math.random() * (10000 - 250));
+    value = Math.floor(lowest + Math.random() * (highest - lowest));
   } while (Math.abs(value - reference) / reference < 0.02);
   return value;
+}
+
+// Fisher-Yates shuffle of three copies of every reference frequency.
+function buildSessionQueue() {
+  const queue = [];
+  for (const frequency of FREQUENCIES) {
+    for (let copy = 0; copy < TRIALS_PER_FREQUENCY; copy += 1) {
+      queue.push(frequency);
+    }
+  }
+  for (let i = queue.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [queue[i], queue[j]] = [queue[j], queue[i]];
+  }
+  return queue;
 }
 
 function sanitizeIdentifier(text) {
@@ -354,6 +375,9 @@ const state = {
   identifierType: 'patient',
   identifier: '',
   visitDate: todayString(),
+  sessionActive: false,
+  sessionQueue: [],
+  sessionIndex: 0,
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -414,36 +438,51 @@ function renderVolumes() {
 
 function renderSession() {
   const idle = state.phase === 'idle';
-  const running = state.phase === 'running';
   const calibrated = allCalibrated();
+  const locked = !idle;
 
-  $('#start-trial').disabled = !idle || !calibrated || !state.mode;
-  $('#stop-trial').disabled = !running;
-  $('#calibrate-all').disabled = !idle;
-  $('#calibrate-one').disabled = !idle;
+  $('#start-trial').disabled =
+    !idle || !calibrated || !state.mode || state.sessionActive;
+  $('#stop-trial').disabled = !state.sessionActive;
+  $('#calibrate-all').disabled = locked;
+  $('#calibrate-one').disabled = locked;
   $('#trial-number').textContent = String(state.trial);
+
+  if (state.sessionActive) {
+    $('#session-progress').textContent =
+      `${state.sessionIndex + 1} / ${SESSION_LENGTH}`;
+  } else if (state.sessionIndex > 0) {
+    $('#session-progress').textContent =
+      `${state.sessionIndex} / ${SESSION_LENGTH}`;
+  } else {
+    $('#session-progress').textContent = '—';
+  }
+
   $('#test-frequency').textContent = state.testFreq ? `${Math.round(state.testFreq)} Hz` : '—';
 
   const labels = {
     idle: 'Idle', calibrating: 'Calibrating', running: 'Matching',
-    confidence: 'Confidence',
+    confidence: 'Confidence', between: 'Next trial',
   };
   $('#state-label').textContent = labels[state.phase] || state.phase;
 
   for (const id of ['ref-frequency', 'ref-ear', 'sound-ms', 'gap-ms', 'mode']) {
-    $('#' + id).disabled = !idle;
+    $('#' + id).disabled = locked;
   }
-  for (const button of $$('[data-reset]')) button.disabled = !idle;
+  for (const button of $$('[data-reset]')) button.disabled = locked;
 
-  const volumeEnabled = idle || running;
+  const volumeEnabled = idle || state.phase === 'running';
   $('#ref-volume').disabled = !volumeEnabled;
   $('#test-volume').disabled = !volumeEnabled;
 
   if (!calibrated) {
     $('#session-status').textContent = 'Calibrate all ten frequencies to unlock Start.';
     $('#session-status').className = 'status-line';
-  } else if (state.phase === 'idle') {
-    $('#session-status').textContent = 'Ready. Start a matching trial.';
+  } else if (state.phase === 'idle' && !state.sessionActive) {
+    const startLabel = state.sessionIndex > 0
+      ? 'Start a new 30-trial session.'
+      : 'Ready. Start a 30-trial session: every frequency, three times, in random order.';
+    $('#session-status').textContent = startLabel;
     $('#session-status').className = 'status-line ok';
   }
 }
@@ -454,7 +493,7 @@ function renderPatient() {
   const patientState = $('#patient-state');
   const pillText = {
     idle: 'Waiting', calibrating: 'Calibrating', running: 'Matching',
-    confidence: 'Confidence',
+    confidence: 'Confidence', between: 'Next trial',
   };
   patientState.textContent = pillText[state.phase] || state.phase;
   patientState.className = 'pill' + (running || confidence ? ' live' : '');
@@ -479,6 +518,8 @@ function renderPatient() {
       : 'Reference and test tones alternate.';
   } else if (confidence) {
     $('#patient-mini').textContent = 'Choose a confidence level.';
+  } else if (state.phase === 'between') {
+    $('#patient-mini').textContent = 'Trial saved. The next trial is starting…';
   } else {
     $('#patient-mini').textContent = 'Waiting for the clinician.';
   }
@@ -641,22 +682,45 @@ async function calibrateFrequencies(list) {
 /* ------------------------------------------------------------------ *
  * Trial flow
  * ------------------------------------------------------------------ */
-async function startTrial() {
+async function startSession() {
   if (!allCalibrated() || state.phase !== 'idle' || !state.mode) return;
-  setPhase('running');
-  $('#session-status').textContent = 'Starting tones…';
-  $('#session-status').className = 'status-line';
+  if (state.sessionActive) return;
+  state.sessionActive = true;
+  state.sessionQueue = buildSessionQueue();
+  state.sessionIndex = 0;
+  state.trial = state.rows.length + 1;
+  await beginSessionTrial();
+}
 
-  const refCal = calibrationVolume(state.refFreq);
-  state.refVolume = refCal.refVol;
+async function beginSessionTrial() {
+  if (!state.sessionActive) return;
+  if (state.sessionIndex >= state.sessionQueue.length) {
+    endSession(true);
+    return;
+  }
+
+  // The reference frequency for this trial comes from the randomized queue.
+  state.refFreq = state.sessionQueue[state.sessionIndex];
+  $('#ref-frequency').value = String(state.refFreq);
+
+  state.refVolume = calibrationVolume(state.refFreq).refVol;
   state.manualTestVolume = false;
   state.testFreq = randomStartFrequency(state.refFreq);
   setPatientSliders(state.testFreq);
   const band = bandFrequency(state.testFreq);
-  state.testVolume = calibrationVolume(band).testVol;
+  const testCal = calibrationVolume(band);
+  state.testVolume = testCal
+    ? testCal.testVol
+    : volumeForDbSpl(CALIB_START_DB, band);
   state.trialRefEar = state.refEar;
   state.confirmedAt = null;
   state.firstMoveAt = null;
+  state.phase = 'running';
+  render();
+  $('#session-status').textContent =
+    `Trial ${state.sessionIndex + 1} of ${SESSION_LENGTH} — ` +
+    `reference ${LABELS[state.refFreq]} Hz. Matching in progress.`;
+  $('#session-status').className = 'status-line';
 
   try {
     await engine.start({
@@ -670,7 +734,9 @@ async function startTrial() {
       testVolume: state.testVolume,
     });
   } catch (error) {
-    setPhase('idle');
+    state.sessionActive = false;
+    state.phase = 'idle';
+    render();
     $('#session-status').textContent = 'Audio error: ' + error.message;
     $('#session-status').className = 'status-line warn';
     return;
@@ -678,9 +744,6 @@ async function startTrial() {
 
   $('#audio-pill').textContent = 'Audio on';
   $('#audio-pill').className = 'pill live';
-  $('#session-status').textContent = 'Matching in progress. Move a patient slider to start the timer.';
-  $('#session-status').className = 'status-line';
-  render();
 }
 
 function confirmMatch() {
@@ -710,12 +773,15 @@ function chooseConfidence(value) {
 }
 
 function finishTrial(confidence) {
+  // Stop may have been pressed while the confidence click was saving.
+  if (state.phase !== 'confidence') return;
+
   const time = state.firstMoveAt
     ? (state.confirmedAt - state.firstMoveAt) / 1000
     : 0;
   state.rows.push([
     state.trial,
-    state.soundMs,
+    state.refFreq,
     Math.round(state.testFreq),
     state.trialRefEar,
     dbSpl(state.refVolume, state.refFreq),
@@ -734,6 +800,25 @@ function finishTrial(confidence) {
   const idleBand = calibrationVolume(state.refFreq);
   state.testVolume = idleBand ? idleBand.testVol : volumeForDbSpl(CALIB_START_DB, state.refFreq);
   engine.stop();
+
+  if (state.sessionActive) {
+    state.sessionIndex += 1;
+    if (state.sessionIndex >= state.sessionQueue.length) {
+      endSession(true);
+      return;
+    }
+    state.phase = 'between';
+    render();
+    $('#session-status').textContent =
+      `Trial ${state.sessionIndex} of ${SESSION_LENGTH} saved with confidence ` +
+      `${confidence}. Next trial starting…`;
+    $('#session-status').className = 'status-line ok';
+    setTimeout(() => {
+      if (state.sessionActive && state.phase === 'between') beginSessionTrial();
+    }, 700);
+    return;
+  }
+
   state.phase = 'idle';
   render();
   $('#session-status').textContent =
@@ -741,18 +826,32 @@ function finishTrial(confidence) {
   $('#session-status').className = 'status-line ok';
 }
 
-function stopTrial() {
-  if (state.phase !== 'running') return;
+function endSession(completed) {
   engine.stop();
+  state.sessionActive = false;
+  state.phase = 'idle';
   state.testFreq = null;
   state.manualTestVolume = false;
   state.confirmedAt = null;
   state.firstMoveAt = null;
   const idleBand = calibrationVolume(state.refFreq);
   state.testVolume = idleBand ? idleBand.testVol : volumeForDbSpl(CALIB_START_DB, state.refFreq);
-  state.phase = 'idle';
   render();
-  $('#session-status').textContent = 'Trial cancelled; no row was written.';
+  if (completed) {
+    $('#session-status').textContent =
+      `Session complete: all ${SESSION_LENGTH} trials saved ` +
+      `(${TRIALS_PER_FREQUENCY} per frequency, randomized order).`;
+    $('#session-status').className = 'status-line ok';
+  }
+}
+
+function stopSession() {
+  if (!state.sessionActive) return;
+  const completed = state.sessionIndex;
+  endSession(false);
+  $('#session-status').textContent =
+    `Session stopped after ${completed} of ${SESSION_LENGTH} saved trials; ` +
+    'the current trial was not written.';
   $('#session-status').className = 'status-line warn';
 }
 
@@ -798,6 +897,10 @@ function download() {
 function resetTable() {
   state.rows = [];
   state.trial = 1;
+  state.sessionActive = false;
+  state.sessionQueue = [];
+  state.sessionIndex = 0;
+  state.phase = 'idle';
   renderTable();
   renderSession();
 }
@@ -929,8 +1032,8 @@ function wireEvents() {
   $('#fine1').addEventListener('input', onCoarseOrMediumChange);
   $('#fine2').addEventListener('input', onPatientSliderChange);
 
-  $('#start-trial').addEventListener('click', startTrial);
-  $('#stop-trial').addEventListener('click', stopTrial);
+  $('#start-trial').addEventListener('click', startSession);
+  $('#stop-trial').addEventListener('click', stopSession);
   $('#confirm-match').addEventListener('click', confirmMatch);
 
   for (const button of $$('[data-reset]')) {

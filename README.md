@@ -10,8 +10,9 @@ Do not use it for diagnosis or patient care.
 
 ## What the demo shows
 
-- Ten-frequency (250–8000 Hz) patient loudness calibration, with **Start**
-  locked until all ten are stored.
+- Interactive two-phase patient loudness calibration for all ten frequencies:
+  the clinician sets the reference-ear level, then the patient matches the
+  test-ear loudness. **Start** stays locked until all ten are stored.
 - A 30-trial session: every frequency three times, in randomized order, with
   automatic advance between trials.
 - Reference ear, sound/gap duration and alternating/continuous mode settings.

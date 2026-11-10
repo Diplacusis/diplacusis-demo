@@ -272,7 +272,8 @@ class ToneEngine {
   }
 
   _schedule() {
-    if (!this.ctx || this.mode !== 'alt') return;
+    if (!this.ctx) return;
+    if (!['alt', 'calib_ref', 'calib_test'].includes(this.mode)) return;
     const now = this.ctx.currentTime;
     if (this.nextStart < now - 0.2) this.nextStart = now + 0.05;
     const horizon = now + 0.9;
@@ -281,8 +282,15 @@ class ToneEngine {
       const sound = this.sound;
       const gap = this.gap;
       this._burst(this.refGate.gain, start, sound);
-      this._burst(this.testGate.gain, start + sound + gap, sound);
-      this.nextStart = start + 2 * (sound + gap);
+      if (this.mode === 'calib_ref') {
+        // Reference-ear calibration: reference burst, then silence.
+        this.nextStart = start + sound + gap;
+      } else {
+        // Alternating trial and test-ear calibration: reference, gap,
+        // test burst, gap.
+        this._burst(this.testGate.gain, start + sound + gap, sound);
+        this.nextStart = start + 2 * (sound + gap);
+      }
     }
   }
 
@@ -378,6 +386,11 @@ const state = {
   sessionActive: false,
   sessionQueue: [],
   sessionIndex: 0,
+  calibrationActive: false,
+  calibrationQueue: [],
+  calibrationIndex: 0,
+  calibrationPhase: null,
+  calibrationFrequency: null,
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -410,15 +423,34 @@ function renderCalibration() {
       : 'Not calibrated';
     grid.appendChild(chip);
   }
+
   const count = state.calibration.size;
   const status = $('#calib-status');
-  if (count === FREQUENCIES.length) {
+  if (state.calibrationActive) {
+    const step = state.calibrationIndex + 1;
+    const total = state.calibrationQueue.length;
+    const frequency = state.calibrationFrequency;
+    const phase = state.calibrationPhase;
+    status.textContent =
+      `Calibration ${step} of ${total}: ${LABELS[frequency]} Hz — ` +
+      (phase === 'ref'
+        ? 'set the reference-ear level, then press Ref OK.'
+        : 'patient matches the loudness, then presses Volume OK.');
+    status.className = 'status-line' + (phase === 'test' ? ' ok' : '');
+  } else if (count === FREQUENCIES.length) {
     status.textContent = 'All ten frequencies calibrated. Start is unlocked.';
     status.className = 'status-line ok';
   } else {
     status.textContent = `${count} of 10 frequencies calibrated. Start is locked.`;
     status.className = 'status-line';
   }
+
+  $('#calibrate-all').disabled = state.phase !== 'idle' || state.sessionActive;
+  $('#calibrate-one').disabled = state.phase !== 'idle' || state.sessionActive;
+  $('#ref-ok').hidden = state.phase !== 'calib_ref';
+  $('#ref-ok').disabled = state.phase !== 'calib_ref';
+  $('#calib-cancel').hidden = !state.calibrationActive;
+  $('#calib-cancel').disabled = !state.calibrationActive;
 }
 
 function renderVolumes() {
@@ -431,9 +463,13 @@ function renderVolumes() {
     `${dbSpl(state.refVolume, state.refFreq)} dB SPL`;
   $('#test-volume-out').textContent =
     `${dbSpl(state.testVolume, testBand)} dB SPL`;
-  $('#manual-note').textContent = state.manualTestVolume
-    ? 'Manual test-ear override active. It is kept while the patient moves the frequency sliders until the next trial.'
-    : 'The test ear follows the calibration band of the current frequency. Move the test slider to override it.';
+  $('#manual-note').textContent = state.calibrationActive
+    ? (state.calibrationPhase === 'ref'
+      ? 'Adjust the Reference ear slider to a comfortable level, then press Ref OK.'
+      : 'The patient uses the Test ear slider to match the reference loudness, then presses Volume OK.')
+    : (state.manualTestVolume
+      ? 'Manual test-ear override active. It is kept while the patient moves the frequency sliders until the next trial.'
+      : 'The test ear follows the calibration band of the current frequency. Move the test slider to override it.');
 }
 
 function renderSession() {
@@ -463,6 +499,7 @@ function renderSession() {
   const labels = {
     idle: 'Idle', calibrating: 'Calibrating', running: 'Matching',
     confidence: 'Confidence', between: 'Next trial',
+    calib_ref: 'Reference level', calib_test: 'Loudness match',
   };
   $('#state-label').textContent = labels[state.phase] || state.phase;
 
@@ -471,11 +508,14 @@ function renderSession() {
   }
   for (const button of $$('[data-reset]')) button.disabled = locked;
 
-  const volumeEnabled = idle || state.phase === 'running';
-  $('#ref-volume').disabled = !volumeEnabled;
-  $('#test-volume').disabled = !volumeEnabled;
+  const refVolumeEnabled =
+    idle || state.phase === 'running' || state.phase === 'calib_ref';
+  const testVolumeEnabled =
+    idle || state.phase === 'running' || state.phase === 'calib_test';
+  $('#ref-volume').disabled = !refVolumeEnabled;
+  $('#test-volume').disabled = !testVolumeEnabled;
 
-  if (!calibrated) {
+  if (!calibrated && !state.calibrationActive) {
     $('#session-status').textContent = 'Calibrate all ten frequencies to unlock Start.';
     $('#session-status').className = 'status-line';
   } else if (state.phase === 'idle' && !state.sessionActive) {
@@ -490,13 +530,24 @@ function renderSession() {
 function renderPatient() {
   const running = state.phase === 'running';
   const confidence = state.phase === 'confidence';
+  const calibRef = state.phase === 'calib_ref';
+  const calibTest = state.phase === 'calib_test';
+  const calibrating = calibRef || calibTest;
   const patientState = $('#patient-state');
   const pillText = {
-    idle: 'Waiting', calibrating: 'Calibrating', running: 'Matching',
-    confidence: 'Confidence', between: 'Next trial',
+    idle: 'Waiting', running: 'Matching', confidence: 'Confidence',
+    between: 'Next trial', calib_ref: 'Reference level', calib_test: 'Match loudness',
   };
   patientState.textContent = pillText[state.phase] || state.phase;
-  patientState.className = 'pill' + (running || confidence ? ' live' : '');
+  patientState.className =
+    'pill' + (running || confidence || calibrating ? ' live' : '');
+  $('#patient-title').textContent = calibrating
+    ? 'Patient — Loudness calibration'
+    : 'Patient — Frequency matching';
+
+  // The calibration and pitch-matching controls are never shown together.
+  $('#frequency-controls').hidden = calibrating;
+  $('#calib-patient').hidden = !calibrating;
 
   for (const id of ['macro', 'fine1', 'fine2']) {
     $('#' + id).disabled = !running;
@@ -507,12 +558,47 @@ function renderPatient() {
   $('#ref-ear-label').textContent = state.refEar === 0 ? 'Left ear' : 'Right ear';
   $('#test-ear-label').textContent = state.refEar === 0 ? 'Right ear' : 'Left ear';
 
-  $('#ear-ref').classList.toggle('playing', running);
-  $('#ear-test').classList.toggle('playing', running);
+  $('#ear-ref').classList.toggle('playing', running || calibRef || calibTest);
+  $('#ear-test').classList.toggle('playing', running || calibTest);
 
-  if (state.phase === 'calibrating') {
-    $('#patient-mini').textContent = 'Calibrating — listen to the reference tone.';
-  } else if (running) {
+  if (calibrating) {
+    const step = state.calibrationIndex + 1;
+    const total = state.calibrationQueue.length;
+    const frequency = state.calibrationFrequency;
+    const earName = state.refEar === 0 ? 'left' : 'right';
+
+    $('#calib-patient-progress').textContent =
+      `Step ${step} of ${total} • ${LABELS[frequency]} Hz`;
+    $('#calib-test-volume').value =
+      String(volumeToSlider(state.testVolume, frequency));
+    $('#calib-test-volume').disabled = !calibTest;
+    $('#calib-test-volume-out').textContent =
+      `${dbSpl(state.testVolume, frequency)} dB SPL`;
+    $('#calib-volume-ok').disabled = !calibTest;
+
+    if (calibRef) {
+      $('#calib-patient-hint').textContent =
+        'Reference ear only. The clinician is setting a comfortable level.';
+      $('#patient-instruction').textContent =
+        `Listen to the reference tone in your ${earName} ear. The clinician is setting a comfortable level.`;
+    } else {
+      $('#calib-patient-hint').textContent =
+        'The reference and test tones now alternate between your ears.';
+      $('#patient-instruction').textContent =
+        'Move the slider until the test ear sounds as loud as the reference ' +
+        'ear in the other ear, then press Volume OK.';
+    }
+    $('#patient-mini').textContent = calibRef
+      ? 'Waiting for the clinician to accept the reference level.'
+      : 'Match the loudness, then press Volume OK.';
+    return;
+  }
+
+  $('#patient-instruction').textContent =
+    'Use all three sliders until the test tone matches the reference tone in ' +
+    'pitch. Press Confirm match when satisfied, then choose a confidence level.';
+
+  if (running) {
     $('#patient-mini').textContent = state.mode === 'int'
       ? 'Both tones are playing continuously.'
       : 'Reference and test tones alternate.';
@@ -624,59 +710,212 @@ function onTestVolumeMoved() {
   const band = bandFrequency(state.testFreq || state.refFreq);
   state.testVolume = sliderToVolume($('#test-volume').value, band);
   state.manualTestVolume = true;
-  if (state.phase === 'running') engine.setBaseVolumes(state.refVolume, state.testVolume);
+  if (state.phase === 'running' || state.phase === 'calib_test') {
+    engine.setBaseVolumes(state.refVolume, state.testVolume);
+  }
   renderVolumes();
+  renderPatient();
 }
 
 function onRefVolumeMoved() {
   state.refVolume = sliderToVolume($('#ref-volume').value, state.refFreq);
-  if (state.phase === 'running') engine.setBaseVolumes(state.refVolume, state.testVolume);
+  if (state.phase === 'running' || state.phase === 'calib_ref') {
+    engine.setBaseVolumes(state.refVolume, state.testVolume);
+  }
   renderVolumes();
+  renderPatient();
+}
+
+function onCalibrationTestVolumeMoved() {
+  if (state.phase !== 'calib_test') return;
+  const frequency = state.calibrationFrequency;
+  state.testVolume = sliderToVolume($('#calib-test-volume').value, frequency);
+  engine.setBaseVolumes(state.refVolume, state.testVolume);
+  renderVolumes();
+  renderPatient();
 }
 
 /* ------------------------------------------------------------------ *
- * Calibration
+ * Patient loudness calibration
+ *
+ * Every frequency is calibrated in two phases, mirroring the desktop
+ * workflow:
+ *   1. reference ear only  — the clinician sets a comfortable level and
+ *      presses Ref OK;
+ *   2. both ears alternate — the patient moves the test-ear volume slider
+ *      until it matches the reference, then presses Volume OK.
  * ------------------------------------------------------------------ */
-async function calibrateFrequencies(list) {
-  if (state.phase !== 'idle') return;
-  const restore = state.refFreq;
-  state.phase = 'calibrating';
+async function startCalibration(frequencies, resetAll) {
+  if (state.phase !== 'idle' || state.sessionActive || state.calibrationActive) return;
+  if (resetAll) state.calibration.clear();
+  state.calibrationQueue = frequencies.slice();
+  state.calibrationIndex = 0;
+  state.calibrationActive = true;
+  state.manualTestVolume = false;
   render();
-  $('#audio-pill').textContent = 'Audio on';
-  $('#audio-pill').className = 'pill live';
-  $('#session-status').textContent = 'Playing calibration tones…';
-  $('#session-status').className = 'status-line';
+  await beginCalibrationFrequency(state.calibrationQueue[0]);
+}
+
+async function beginCalibrationFrequency(frequency) {
+  if (!state.calibrationActive) return;
+  state.calibrationFrequency = frequency;
+  state.calibrationPhase = 'ref';
+  state.phase = 'calib_ref';
+  state.refFreq = frequency;
+  $('#ref-frequency').value = String(frequency);
+  const startVolume = volumeForDbSpl(CALIB_START_DB, frequency);
+  state.refVolume = startVolume;
+  state.testVolume = startVolume;
+  state.testFreq = frequency;
+  state.manualTestVolume = false;
+  render();
 
   try {
-    for (const frequency of list) {
-      state.refFreq = frequency;
-      $('#ref-frequency').value = String(frequency);
-      render();
-      await engine.beep(frequency, state.refEar, volumeForDbSpl(CALIB_START_DB, frequency));
-      await sleep(360);
-      const volume = volumeForDbSpl(CALIB_START_DB, frequency);
-      state.calibration.set(frequency, { refVol: volume, testVol: volume });
-      renderCalibration();
-      renderSession();
-    }
+    await engine.start({
+      mode: 'calib_ref',
+      soundMs: state.soundMs,
+      gapMs: state.gapMs,
+      refEar: state.refEar,
+      refFreq: frequency,
+      testFreq: frequency,
+      refVolume: state.refVolume,
+      testVolume: state.testVolume,
+    });
   } catch (error) {
-    $('#session-status').textContent = 'Audio error: ' + error.message;
-    $('#session-status').className = 'status-line warn';
+    if (state.calibrationActive && state.calibrationFrequency === frequency) {
+      calibrationAudioError(error);
+    }
+    return;
+  }
+  // The phase may have advanced while the audio engine was starting.
+  if (!state.calibrationActive || state.phase !== 'calib_ref' ||
+      state.calibrationFrequency !== frequency) {
+    return;
   }
 
-  state.refFreq = restore;
-  $('#ref-frequency').value = String(restore);
-  state.refVolume = volumeForDbSpl(CALIB_START_DB, restore);
-  const band = bandFrequency(state.testFreq || restore);
-  const stored = calibrationVolume(band);
-  state.testVolume = stored ? stored.testVol : volumeForDbSpl(CALIB_START_DB, band);
-  state.manualTestVolume = false;
+  $('#audio-pill').textContent = 'Audio on';
+  $('#audio-pill').className = 'pill live';
+  $('#session-status').textContent =
+    `Calibration ${state.calibrationIndex + 1} of ${state.calibrationQueue.length}: ` +
+    `${LABELS[frequency]} Hz — adjust the Reference ear slider, then press Ref OK.`;
+  $('#session-status').className = 'status-line';
+}
+
+async function acceptReferenceVolume() {
+  if (state.phase !== 'calib_ref') return;
+  const frequency = state.calibrationFrequency;
+  state.calibrationPhase = 'test';
+  state.phase = 'calib_test';
+  render();
+
+  try {
+    await engine.start({
+      mode: 'calib_test',
+      soundMs: state.soundMs,
+      gapMs: state.gapMs,
+      refEar: state.refEar,
+      refFreq: frequency,
+      testFreq: frequency,
+      refVolume: state.refVolume,
+      testVolume: state.testVolume,
+    });
+  } catch (error) {
+    if (state.calibrationActive && state.calibrationFrequency === frequency) {
+      calibrationAudioError(error);
+    }
+    return;
+  }
+  // The volume may have been accepted while the engine was starting.
+  if (!state.calibrationActive || state.phase !== 'calib_test' ||
+      state.calibrationFrequency !== frequency) {
+    return;
+  }
+
+  $('#session-status').textContent =
+    `Calibration ${state.calibrationIndex + 1} of ${state.calibrationQueue.length}: ` +
+    `${LABELS[frequency]} Hz — both ears alternate. The patient matches the ` +
+    'loudness, then presses Volume OK.';
+  $('#session-status').className = 'status-line ok';
+}
+
+async function acceptCalibrationVolume() {
+  if (state.phase !== 'calib_test') return;
+  const frequency = state.calibrationFrequency;
+  state.calibration.set(frequency, {
+    refVol: state.refVolume,
+    testVol: state.testVolume,
+  });
+  state.calibrationIndex += 1;
+  engine.stop();
+
+  if (state.calibrationIndex >= state.calibrationQueue.length) {
+    finishCalibration();
+    return;
+  }
+  await beginCalibrationFrequency(
+    state.calibrationQueue[state.calibrationIndex]
+  );
+}
+
+function finishCalibration() {
+  engine.stop();
+  state.calibrationActive = false;
+  state.calibrationPhase = null;
+  state.calibrationFrequency = null;
+  state.calibrationQueue = [];
+  state.calibrationIndex = 0;
   state.phase = 'idle';
+  state.testFreq = null;
+  state.manualTestVolume = false;
+  const stored = calibrationVolume(state.refFreq);
+  state.refVolume = stored ? stored.refVol : volumeForDbSpl(CALIB_START_DB, state.refFreq);
+  const band = bandFrequency(state.refFreq);
+  const storedTest = calibrationVolume(band);
+  state.testVolume = storedTest
+    ? storedTest.testVol
+    : volumeForDbSpl(CALIB_START_DB, band);
   render();
   if (allCalibrated()) {
-    $('#session-status').textContent = 'Calibration complete. Start is unlocked.';
+    $('#session-status').textContent =
+      'Calibration complete (10/10). Start is unlocked.';
     $('#session-status').className = 'status-line ok';
+  } else {
+    $('#session-status').textContent =
+      `Calibration saved (${state.calibration.size}/10 stored). ` +
+      'Calibrate the remaining frequencies before starting.';
+    $('#session-status').className = 'status-line warn';
   }
+}
+
+function cancelCalibration() {
+  if (!state.calibrationActive) return;
+  engine.stop();
+  state.calibrationActive = false;
+  state.calibrationPhase = null;
+  state.calibrationFrequency = null;
+  state.calibrationQueue = [];
+  state.calibrationIndex = 0;
+  state.phase = 'idle';
+  state.testFreq = null;
+  state.manualTestVolume = false;
+  render();
+  $('#session-status').textContent =
+    `Calibration cancelled; ${state.calibration.size} of 10 frequencies stored.`;
+  $('#session-status').className = 'status-line warn';
+}
+
+function calibrationAudioError(error) {
+  engine.stop();
+  state.calibrationActive = false;
+  state.calibrationPhase = null;
+  state.calibrationFrequency = null;
+  state.calibrationQueue = [];
+  state.calibrationIndex = 0;
+  state.phase = 'idle';
+  state.testFreq = null;
+  render();
+  $('#session-status').textContent = 'Audio error: ' + error.message;
+  $('#session-status').className = 'status-line warn';
 }
 
 /* ------------------------------------------------------------------ *
@@ -1022,8 +1261,16 @@ function wireEvents() {
   });
   $('#mode').addEventListener('change', (event) => { state.mode = event.target.value; });
 
-  $('#calibrate-all').addEventListener('click', () => calibrateFrequencies(FREQUENCIES.slice()));
-  $('#calibrate-one').addEventListener('click', () => calibrateFrequencies([state.refFreq]));
+  $('#calibrate-all').addEventListener('click', () => {
+    startCalibration(FREQUENCIES.slice(), true);
+  });
+  $('#calibrate-one').addEventListener('click', () => {
+    startCalibration([state.refFreq], false);
+  });
+  $('#ref-ok').addEventListener('click', acceptReferenceVolume);
+  $('#calib-cancel').addEventListener('click', cancelCalibration);
+  $('#calib-volume-ok').addEventListener('click', acceptCalibrationVolume);
+  $('#calib-test-volume').addEventListener('input', onCalibrationTestVolumeMoved);
 
   $('#ref-volume').addEventListener('input', onRefVolumeMoved);
   $('#test-volume').addEventListener('input', onTestVolumeMoved);

@@ -283,6 +283,21 @@ input[type="range"]:disabled { opacity: .45; }
 .sliders label { margin-bottom: 14px; font-weight: 600; }
 .patient-hint { margin: 0 0 10px; font-size: .78rem; color: var(--muted); }
 
+.calib-patient {
+  border: 1px solid #8fd0c8;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.calib-step {
+  margin: 0 0 10px;
+  font-size: .9rem;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+.calib-patient .slider-row { margin-bottom: 10px; }
+
 .btn.confirm {
   width: 100%;
   padding: 12px;

@@ -58,12 +58,16 @@
 
       <article class="card">
         <h3>2. Patient loudness calibration</h3>
-        <p class="hint">Start unlocks only after all ten frequencies are stored.
-          A session runs 30 trials: every frequency three times, in random order.</p>
+        <p class="hint">Each frequency is calibrated in two phases: the clinician
+          sets the reference-ear level, then the patient matches the test-ear
+          loudness. Start unlocks only after all ten are stored. A session then
+          runs 30 trials: every frequency three times, in random order.</p>
         <div class="calib-grid" id="calib-grid"></div>
         <div class="button-row">
-          <button class="btn primary" id="calibrate-all">Calibrate all 10 (demo)</button>
-          <button class="btn" id="calibrate-one">Calibrate selected only</button>
+          <button class="btn primary" id="calibrate-all">Start full calibration (10)</button>
+          <button class="btn" id="calibrate-one">Calibrate selected frequency</button>
+          <button class="btn primary" id="ref-ok" hidden>Ref OK — accept reference level</button>
+          <button class="btn danger" id="calib-cancel" hidden>Cancel calibration</button>
         </div>
         <p class="status-line" id="calib-status">No frequencies calibrated.</p>
       </article>
@@ -148,28 +152,43 @@
         </div>
       </div>
 
-      <div class="sliders">
-        <label>1 — Coarse
-          <input id="macro" type="range" min="0" max="127" step="1" value="40" disabled>
+      <div class="calib-patient" id="calib-patient" hidden>
+        <p class="calib-step" id="calib-patient-progress">—</p>
+        <label class="slider-row">
+          <span>Test ear</span>
+          <input id="calib-test-volume" type="range" min="0" max="1000" step="1" value="0" disabled>
+          <output id="calib-test-volume-out">—</output>
         </label>
-        <label>2 — Medium
-          <input id="fine1" type="range" min="0" max="623" step="1" value="301" disabled>
-        </label>
-        <label>3 — Fine
-          <input id="fine2" type="range" min="0" max="1000" step="1" value="500" disabled>
-        </label>
+        <p class="patient-hint" id="calib-patient-hint">
+          The reference and test tones alternate between your ears.
+        </p>
+        <button class="btn confirm" id="calib-volume-ok" disabled>Volume OK</button>
       </div>
 
-      <p class="patient-hint" id="patient-hint">
-        Sliders unlock when the trial starts. Coarse and Medium recentre Fine;
-        Fine makes the smallest change.
-      </p>
+      <div id="frequency-controls">
+        <div class="sliders">
+          <label>1 — Coarse
+            <input id="macro" type="range" min="0" max="127" step="1" value="40" disabled>
+          </label>
+          <label>2 — Medium
+            <input id="fine1" type="range" min="0" max="623" step="1" value="301" disabled>
+          </label>
+          <label>3 — Fine
+            <input id="fine2" type="range" min="0" max="1000" step="1" value="500" disabled>
+          </label>
+        </div>
 
-      <button class="btn confirm" id="confirm-match" disabled>Confirm match</button>
+        <p class="patient-hint" id="patient-hint">
+          Sliders unlock when the trial starts. Coarse and Medium recentre Fine;
+          Fine makes the smallest change.
+        </p>
 
-      <div class="confidence" id="confidence" hidden>
-        <p>How confident are you in the match?</p>
-        <div class="confidence-grid" id="confidence-grid"></div>
+        <button class="btn confirm" id="confirm-match" disabled>Confirm match</button>
+
+        <div class="confidence" id="confidence" hidden>
+          <p>How confident are you in the match?</p>
+          <div class="confidence-grid" id="confidence-grid"></div>
+        </div>
       </div>
 
       <p class="mini-status" id="patient-mini">Waiting for the clinician.</p>

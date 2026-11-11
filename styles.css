@@ -336,6 +336,8 @@ th, td { border-bottom: 1px solid var(--line); padding: 7px 8px; text-align: rig
 th { color: var(--muted); font-weight: 700; background: #f7fafc; }
 th:first-child, td:first-child { text-align: left; }
 tbody tr:hover { background: #f7fafc; }
+tbody tr.calibration-row { background: #eef7f5; color: #4b6470; }
+tbody tr.calibration-row td { font-style: italic; }
 .empty { margin: 10px 0 0; color: var(--muted); font-size: .82rem; }
 
 footer {

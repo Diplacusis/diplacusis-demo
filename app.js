@@ -28,6 +28,7 @@ const MIN_VOLUME = 0.003;
 const MAX_VOLUME = 1.0;
 const CALIB_START_DB = 65;
 const SAFETY_CAP_DB = 95;
+const MODE_CALIB = 1;
 const MODE_ALT = 2;
 const MODE_INT = 3;
 // Coarse position 0 is an octave below the lowest reference frequency, so the
@@ -616,6 +617,10 @@ function renderTable() {
   body.innerHTML = '';
   for (const row of state.rows) {
     const tr = document.createElement('tr');
+    if (row[10] === MODE_CALIB) {
+      tr.className = 'calibration-row';
+      tr.title = 'Patient loudness calibration';
+    }
     for (const value of row) {
       const td = document.createElement('td');
       td.textContent = String(value);
@@ -623,7 +628,13 @@ function renderTable() {
     }
     body.appendChild(tr);
   }
-  $('#row-count').textContent = `${state.rows.length} row${state.rows.length === 1 ? '' : 's'}`;
+  const calibrations = state.rows.filter((row) => row[10] === MODE_CALIB).length;
+  const trials = state.rows.length - calibrations;
+  const parts = [`${trials} trial${trials === 1 ? '' : 's'}`];
+  if (calibrations > 0) {
+    parts.push(`${calibrations} calibration${calibrations === 1 ? '' : 's'}`);
+  }
+  $('#row-count').textContent = parts.join(' · ');
   $('#empty-rows').hidden = state.rows.length > 0;
 }
 
@@ -845,6 +856,21 @@ async function acceptCalibrationVolume() {
     refVol: state.refVolume,
     testVol: state.testVolume,
   });
+  // Log the calibration exactly like the desktop app: trial 0, confidence 0,
+  // time 0 and mode 1 (calibration), with both columns playing the same tone.
+  state.rows.push([
+    0,
+    frequency,
+    frequency,
+    state.refEar,
+    dbSpl(state.refVolume, frequency),
+    dbSpl(state.testVolume, frequency),
+    Number(state.refVolume.toFixed(6)),
+    Number(state.testVolume.toFixed(6)),
+    0,
+    0,
+    MODE_CALIB,
+  ]);
   state.calibrationIndex += 1;
   engine.stop();
 
@@ -927,7 +953,8 @@ async function startSession() {
   state.sessionActive = true;
   state.sessionQueue = buildSessionQueue();
   state.sessionIndex = 0;
-  state.trial = state.rows.length + 1;
+  // Calibration rows also live in the table, so count only real trials.
+  state.trial = state.rows.filter((row) => row[10] !== MODE_CALIB).length + 1;
   await beginSessionTrial();
 }
 

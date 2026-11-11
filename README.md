@@ -22,6 +22,8 @@ Do not use it for diagnosis or patient care.
 - Per-frequency test-ear volume following the calibration band, with a manual
   override.
 - Confirm match, confidence 1–10, and the 11-column result row.
+- Calibration rows in the results table and export, matching the desktop
+  application: trial 0, confidence 0, time 0 and mode 1.
 - Named or participant-ID export with visit date, and the four reset controls.
 - Responsive layout for desktop and mobile.
 

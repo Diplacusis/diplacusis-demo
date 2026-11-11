@@ -13,8 +13,10 @@ Do not use it for diagnosis or patient care.
 - Interactive two-phase patient loudness calibration for all ten frequencies:
   the clinician sets the reference-ear level, then the patient matches the
   test-ear loudness. **Start** stays locked until all ten are stored.
-- A 30-trial session: every frequency three times, in randomized order, with
+- Three randomized passes of all ten frequencies (30 trials total), with
   automatic advance between trials.
+- Matching rows are saved to the table immediately on confirmation, before the
+  confidence rating, and a session stopped early keeps the current trial.
 - Reference ear, sound/gap duration and alternating/continuous mode settings.
 - The three-slider patient frequency cascade from the desktop application.
   Coarse position 0 is 125 Hz, an octave below the lowest reference, so 250 Hz

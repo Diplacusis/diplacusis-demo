@@ -61,7 +61,7 @@
         <p class="hint">Each frequency is calibrated in two phases: the clinician
           sets the reference-ear level, then the patient matches the test-ear
           loudness. Start unlocks only after all ten are stored. A session then
-          runs 30 trials: every frequency three times, in random order.</p>
+          runs three randomized passes of all ten frequencies (30 trials).</p>
         <div class="calib-grid" id="calib-grid"></div>
         <div class="button-row">
           <button class="btn primary" id="calibrate-all">Start full calibration (10)</button>
@@ -89,7 +89,7 @@
       <article class="card">
         <h3>4. Session</h3>
         <div class="button-row">
-          <button class="btn primary" id="start-trial" disabled>Start session (30 trials)</button>
+          <button class="btn primary" id="start-trial" disabled>Start session (3 × 10 trials)</button>
           <button class="btn" id="stop-trial" disabled>Stop session</button>
         </div>
         <p class="status-line" id="session-status">Calibrate all ten frequencies to unlock Start.</p>

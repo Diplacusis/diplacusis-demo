@@ -147,19 +147,27 @@ function randomStartFrequency(reference) {
   return value;
 }
 
-// Fisher-Yates shuffle of three copies of every reference frequency.
+// Three passes, each a fresh Fisher-Yates shuffle of all ten frequencies.
+// Every pass therefore tests 250-8000 Hz once, in its own random order.
+function shuffleFrequencies() {
+  const pass = FREQUENCIES.slice();
+  for (let i = pass.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pass[i], pass[j]] = [pass[j], pass[i]];
+  }
+  return pass;
+}
+
 function buildSessionQueue() {
   const queue = [];
-  for (const frequency of FREQUENCIES) {
-    for (let copy = 0; copy < TRIALS_PER_FREQUENCY; copy += 1) {
-      queue.push(frequency);
-    }
-  }
-  for (let i = queue.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [queue[i], queue[j]] = [queue[j], queue[i]];
+  for (let pass = 0; pass < TRIALS_PER_FREQUENCY; pass += 1) {
+    queue.push(...shuffleFrequencies());
   }
   return queue;
+}
+
+function sessionRound(index) {
+  return Math.floor(index / FREQUENCIES.length) + 1;
 }
 
 function sanitizeIdentifier(text) {
@@ -387,6 +395,8 @@ const state = {
   sessionActive: false,
   sessionQueue: [],
   sessionIndex: 0,
+  sessionSaved: 0,
+  pendingRowIndex: null,
   calibrationActive: false,
   calibrationQueue: [],
   calibrationIndex: 0,
@@ -521,8 +531,8 @@ function renderSession() {
     $('#session-status').className = 'status-line';
   } else if (state.phase === 'idle' && !state.sessionActive) {
     const startLabel = state.sessionIndex > 0
-      ? 'Start a new 30-trial session.'
-      : 'Ready. Start a 30-trial session: every frequency, three times, in random order.';
+      ? 'Start a new session: three randomized passes of all ten frequencies.'
+      : 'Ready. Start a 30-trial session: three randomized passes of all ten frequencies.';
     $('#session-status').textContent = startLabel;
     $('#session-status').className = 'status-line ok';
   }
@@ -953,6 +963,8 @@ async function startSession() {
   state.sessionActive = true;
   state.sessionQueue = buildSessionQueue();
   state.sessionIndex = 0;
+  state.sessionSaved = 0;
+  state.pendingRowIndex = null;
   // Calibration rows also live in the table, so count only real trials.
   state.trial = state.rows.filter((row) => row[10] !== MODE_CALIB).length + 1;
   await beginSessionTrial();
@@ -984,7 +996,8 @@ async function beginSessionTrial() {
   state.phase = 'running';
   render();
   $('#session-status').textContent =
-    `Trial ${state.sessionIndex + 1} of ${SESSION_LENGTH} — ` +
+    `Round ${sessionRound(state.sessionIndex)} of ${TRIALS_PER_FREQUENCY} — ` +
+    `trial ${state.sessionIndex + 1} of ${SESSION_LENGTH} — ` +
     `reference ${LABELS[state.refFreq]} Hz. Matching in progress.`;
   $('#session-status').className = 'status-line';
 
@@ -1012,10 +1025,42 @@ async function beginSessionTrial() {
   $('#audio-pill').className = 'pill live';
 }
 
+function buildTrialRow(confidence, endTime) {
+  const end = endTime || state.confirmedAt || performance.now();
+  const time = state.firstMoveAt
+    ? (end - state.firstMoveAt) / 1000
+    : 0;
+  return [
+    state.trial,
+    state.refFreq,
+    Math.round(state.testFreq),
+    state.trialRefEar,
+    dbSpl(state.refVolume, state.refFreq),
+    dbSpl(state.testVolume, bandFrequency(state.testFreq)),
+    Number(state.refVolume.toFixed(6)),
+    Number(state.testVolume.toFixed(6)),
+    confidence,
+    Number(time.toFixed(2)),
+    state.mode === 'alt' ? MODE_ALT : MODE_INT,
+  ];
+}
+
+function saveCurrentTrial(confidence, endTime) {
+  // Write the row immediately so stopping early never loses data.  A row
+  // starts with confidence 0 and is updated when a rating is chosen.
+  state.pendingRowIndex = state.rows.length;
+  state.rows.push(buildTrialRow(confidence, endTime));
+  state.sessionSaved += 1;
+  return state.pendingRowIndex;
+}
+
 function confirmMatch() {
   if (state.phase !== 'running') return;
   state.confirmedAt = performance.now();
   engine.stop();
+  // The match is written to the table straight away, before the confidence
+  // rating, so an interrupted session still keeps the confirmed result.
+  saveCurrentTrial(0, state.confirmedAt);
   setPhase('confidence');
   $('#patient-mini').textContent = 'Choose a confidence level.';
   const grid = $('#confidence-grid');
@@ -1031,6 +1076,10 @@ function confirmMatch() {
 
 function chooseConfidence(value) {
   if (state.phase !== 'confidence') return;
+  // Record the rating immediately; the short delay only paces the advance.
+  if (state.pendingRowIndex !== null && state.rows[state.pendingRowIndex]) {
+    state.rows[state.pendingRowIndex][8] = value;
+  }
   const elapsed = performance.now() - (state.confirmedAt || performance.now());
   const remaining = Math.max(0, 500 - elapsed);
   for (const button of $$('#confidence-grid button')) button.disabled = true;
@@ -1042,22 +1091,10 @@ function finishTrial(confidence) {
   // Stop may have been pressed while the confidence click was saving.
   if (state.phase !== 'confidence') return;
 
-  const time = state.firstMoveAt
-    ? (state.confirmedAt - state.firstMoveAt) / 1000
-    : 0;
-  state.rows.push([
-    state.trial,
-    state.refFreq,
-    Math.round(state.testFreq),
-    state.trialRefEar,
-    dbSpl(state.refVolume, state.refFreq),
-    dbSpl(state.testVolume, bandFrequency(state.testFreq)),
-    Number(state.refVolume.toFixed(6)),
-    Number(state.testVolume.toFixed(6)),
-    confidence,
-    Number(time.toFixed(2)),
-    state.mode === 'alt' ? MODE_ALT : MODE_INT,
-  ]);
+  if (state.pendingRowIndex !== null && state.rows[state.pendingRowIndex]) {
+    state.rows[state.pendingRowIndex][8] = confidence;
+  }
+  state.pendingRowIndex = null;
   state.trial += 1;
   state.testFreq = null;
   state.manualTestVolume = false;
@@ -1076,7 +1113,8 @@ function finishTrial(confidence) {
     state.phase = 'between';
     render();
     $('#session-status').textContent =
-      `Trial ${state.sessionIndex} of ${SESSION_LENGTH} saved with confidence ` +
+      `Round ${sessionRound(state.sessionIndex - 1)} of ${TRIALS_PER_FREQUENCY} — ` +
+      `trial ${state.sessionIndex} of ${SESSION_LENGTH} saved with confidence ` +
       `${confidence}. Next trial starting…`;
     $('#session-status').className = 'status-line ok';
     setTimeout(() => {
@@ -1096,6 +1134,7 @@ function endSession(completed) {
   engine.stop();
   state.sessionActive = false;
   state.phase = 'idle';
+  state.pendingRowIndex = null;
   state.testFreq = null;
   state.manualTestVolume = false;
   state.confirmedAt = null;
@@ -1106,18 +1145,32 @@ function endSession(completed) {
   if (completed) {
     $('#session-status').textContent =
       `Session complete: all ${SESSION_LENGTH} trials saved ` +
-      `(${TRIALS_PER_FREQUENCY} per frequency, randomized order).`;
+      `(${TRIALS_PER_FREQUENCY} randomized passes of all ten frequencies).`;
     $('#session-status').className = 'status-line ok';
   }
 }
 
 function stopSession() {
   if (!state.sessionActive) return;
-  const completed = state.sessionIndex;
+  let note;
+  if (state.phase === 'running') {
+    // Nothing was confirmed, but keep the current slider position as a
+    // confidence-0 row so the session data is not lost.
+    saveCurrentTrial(0);
+    note = 'the in-progress trial was saved with confidence 0';
+  } else if (state.phase === 'confidence') {
+    const rated = state.pendingRowIndex !== null &&
+      state.rows[state.pendingRowIndex][8] > 0;
+    note = rated
+      ? 'the confirmed trial was saved with its confidence'
+      : 'the confirmed trial was saved with confidence 0';
+  } else {
+    note = 'all completed trials were saved';
+  }
+  const saved = state.sessionSaved;
   endSession(false);
   $('#session-status').textContent =
-    `Session stopped after ${completed} of ${SESSION_LENGTH} saved trials; ` +
-    'the current trial was not written.';
+    `Session stopped after ${saved} of ${SESSION_LENGTH} saved trials; ${note}.`;
   $('#session-status').className = 'status-line warn';
 }
 
@@ -1166,6 +1219,8 @@ function resetTable() {
   state.sessionActive = false;
   state.sessionQueue = [];
   state.sessionIndex = 0;
+  state.sessionSaved = 0;
+  state.pendingRowIndex = null;
   state.phase = 'idle';
   renderTable();
   renderSession();

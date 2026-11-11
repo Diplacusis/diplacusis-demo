@@ -3,6 +3,8 @@
 A proof-of-concept, browser-based demonstration of the Diplacusis
 Frequency-Matching Test v22 workflow.
 
+Live demo: <https://diplacusis.github.io/diplacusis-demo/>
+
 **This is a demo, not a clinical instrument.** Tones are generated with the
 browser Web Audio API and pass through the operating system mixer, so output
 level is not calibrated and the clinical 95 dB SPL guarantee does not apply.
